@@ -402,6 +402,7 @@ def test_partition_subset_get_partition_keys_not_in_subset(case_str: str):
 
     expected_range_count = case_str.count("-+") + (1 if case_str[0] == "+" else 0)
     assert len(subset.included_time_windows) == expected_range_count, case_str
+    assert len(subset) == case_str.count("+")
 
 
 @pytest.mark.parametrize(
@@ -508,6 +509,7 @@ def test_partition_subset_with_partition_keys(initial: str, added: str):
         1 if updated_subset_str[0] == "+" else 0
     )
     assert len(updated_subset.included_time_windows) == expected_range_count, updated_subset_str
+    assert len(updated_subset) == updated_subset_str.count("+")
 
 
 def test_time_window_partitions_subset():
@@ -516,3 +518,12 @@ def test_time_window_partitions_subset():
     with_keys = ["2022-01-02", "2022-01-09", "2022-01-23", "2022-02-06"]
     subset = weekly_partitions_def.empty_subset().with_partition_keys(with_keys)
     assert set(subset.get_partition_keys()) == set(with_keys)
+
+
+def test_time_window_partiitons_deserialize_backwards_compatible():
+    serialized = "[[1420156800.0, 1420243200.0], [1420329600.0, 1420416000.0]]"
+    partitions_def = DailyPartitionsDefinition(start_date="2015-01-01")
+    assert partitions_def.deserialize_subset(serialized).get_partition_keys() == [
+        "2015-01-02",
+        "2015-01-04",
+    ]

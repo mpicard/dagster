@@ -9,6 +9,7 @@ from heapq import heapify, heappop, heappush
 from typing import (
     TYPE_CHECKING,
     AbstractSet,
+    Callable,
     Dict,
     Iterable,
     Mapping,
@@ -222,48 +223,43 @@ class ToposortedPriorityQueue:
         return len(self._heap)
 
 
-def find_stale_candidates(
+def find_parent_materialized_asset_partitions(
     instance_queryer: CachingInstanceQueryer,
-    cursor: AssetReconciliationCursor,
+    latest_storage_id: Optional[int],
     target_asset_selection: AssetSelection,
     asset_graph: AssetGraph,
 ) -> Tuple[AbstractSet[AssetKeyPartitionKey], Optional[int]]:
     """
-    Cheaply identifies a set of reconciliation candidates, which can then be vetted with more
-    heavyweight logic after.
-
-    The contract of this function is:
-    - Every asset (partition) that requires reconciliation must either be one of the returned
-        candidates or a descendant of one of the returned candidates.
-    - Not every returned candidate must require reconciliation.
+    Finds asset partitions in the given selection whose parents have been materialized since
+    latest_storage_id.
 
     Returns:
-        - A set of reconciliation candidates.
+        - A set of asset partitions.
         - The latest observed storage_id across all relevant assets. Can be used to avoid scanning
             the same events the next time this function is called.
     """
 
-    stale_candidates: Set[AssetKeyPartitionKey] = set()
-    latest_storage_id = None
-
+    result_asset_partitions: Set[AssetKeyPartitionKey] = set()
     target_asset_keys = target_asset_selection.resolve(asset_graph)
 
-    for asset_key, record in instance_queryer.get_latest_materialization_records_by_key(
-        target_asset_selection.upstream(depth=1).resolve(asset_graph),
-        cursor.latest_storage_id,
-    ).items():
-        # The children of updated assets might now be unreconciled:
-        for child in asset_graph.get_children_partitions(asset_key, record.partition_key):
-            if (
-                child.asset_key in target_asset_keys
-                and not instance_queryer.is_asset_partition_in_run(record.run_id, child)
-            ):
-                stale_candidates.add(child)
+    for asset_key in target_asset_selection.upstream(depth=1).resolve(asset_graph):
+        records = instance_queryer.get_materialization_records(
+            asset_key=asset_key, after_cursor=latest_storage_id
+        )
+        print(f"num records for asset {asset_key}: {len(list(records))}")
+        print([record.storage_id for record in records])
+        for record in records:
+            for child in asset_graph.get_children_partitions(asset_key, record.partition_key):
+                if (
+                    child.asset_key in target_asset_keys
+                    and not instance_queryer.is_asset_partition_in_run(record.run_id, child)
+                ):
+                    result_asset_partitions.add(child)
 
-        if latest_storage_id is None or record.storage_id > latest_storage_id:
-            latest_storage_id = record.storage_id
+            if latest_storage_id is None or record.storage_id > latest_storage_id:
+                latest_storage_id = record.storage_id
 
-    return (stale_candidates, latest_storage_id)
+    return (result_asset_partitions, latest_storage_id)
 
 
 def find_never_materialized_or_requested_root_asset_partitions(
@@ -313,7 +309,7 @@ def find_never_materialized_or_requested_root_asset_partitions(
     )
 
 
-def determine_asset_partitions_to_reconcile(
+def determine_asset_partitions_to_reconcile2(
     instance_queryer: CachingInstanceQueryer,
     cursor: AssetReconciliationCursor,
     target_asset_selection: AssetSelection,
@@ -336,9 +332,9 @@ def determine_asset_partitions_to_reconcile(
         asset_graph=asset_graph,
     )
 
-    stale_candidates, latest_storage_id = find_stale_candidates(
+    stale_candidates, latest_storage_id = find_parent_materialized_asset_partitions(
         instance_queryer=instance_queryer,
-        cursor=cursor,
+        latest_storage_id=cursor.latest_storage_id,
         target_asset_selection=target_asset_selection,
         asset_graph=asset_graph,
     )
@@ -406,6 +402,113 @@ def determine_asset_partitions_to_reconcile(
         newly_materialized_root_partitions_by_asset_key,
         latest_storage_id,
     )
+
+
+def determine_asset_partitions_to_reconcile(
+    instance_queryer: CachingInstanceQueryer,
+    cursor: AssetReconciliationCursor,
+    target_asset_selection: AssetSelection,
+    asset_graph: AssetGraph,
+    eventual_asset_partitions_to_reconcile_for_freshness: AbstractSet[AssetKeyPartitionKey],
+) -> Tuple[
+    AbstractSet[AssetKeyPartitionKey],
+    AbstractSet[AssetKey],
+    Mapping[AssetKey, AbstractSet[str]],
+    Optional[int],
+]:
+    (
+        never_materialized_or_requested_roots,
+        newly_materialized_root_asset_keys,
+        newly_materialized_root_partitions_by_asset_key,
+    ) = find_never_materialized_or_requested_root_asset_partitions(
+        instance_queryer=instance_queryer,
+        cursor=cursor,
+        target_asset_selection=target_asset_selection,
+        asset_graph=asset_graph,
+    )
+
+    stale_candidates, latest_storage_id = find_parent_materialized_asset_partitions(
+        instance_queryer=instance_queryer,
+        latest_storage_id=cursor.latest_storage_id,
+        target_asset_selection=target_asset_selection,
+        asset_graph=asset_graph,
+    )
+    target_asset_keys = target_asset_selection.resolve(asset_graph)
+
+    to_reconcile: Set[AssetKeyPartitionKey] = set()
+
+    def handle_candidate(candidate: AssetKeyPartitionKey) -> bool:
+        # no need to update this now, as it will be updated later
+        if candidate in eventual_asset_partitions_to_reconcile_for_freshness:
+            return False
+
+        if (
+            candidate.asset_key in target_asset_keys
+            and
+            # all of its parents reconciled first
+            all(
+                (
+                    (
+                        parent in to_reconcile
+                        # if they don't have the same partitioning, then we can't launch a run that
+                        # targets both, so we need to wait until the parent is reconciled before
+                        # launching a run for the child
+                        and asset_graph.have_same_partitioning(
+                            parent.asset_key, candidate.asset_key
+                        )
+                    )
+                    or (
+                        instance_queryer.is_reconciled(
+                            asset_partition=parent, asset_graph=asset_graph
+                        )
+                    )
+                )
+                for parent in asset_graph.get_parents_partitions(
+                    candidate.asset_key, candidate.partition_key
+                )
+            )
+            and not instance_queryer.is_reconciled(
+                asset_partition=candidate, asset_graph=asset_graph
+            )
+        ):
+            to_reconcile.add(candidate)
+            return True
+
+        return False
+
+    bfs_asset_partition_graph(
+        handle_candidate,
+        initial_nodes=set(itertools.chain(never_materialized_or_requested_roots, stale_candidates)),
+        asset_graph=asset_graph,
+    )
+
+    return (
+        to_reconcile,
+        newly_materialized_root_asset_keys,
+        newly_materialized_root_partitions_by_asset_key,
+        latest_storage_id,
+    )
+
+
+def bfs_asset_partition_graph(
+    handle_node_fn: Callable[[AssetKeyPartitionKey], bool],
+    initial_nodes: Iterable[AssetKeyPartitionKey],
+    asset_graph: AssetGraph,
+) -> None:
+    all_nodes = set(initial_nodes)
+
+    # invariant: we never consider a candidate before considering its ancestors
+    queue = ToposortedPriorityQueue(asset_graph, all_nodes)
+
+    while len(queue) > 0:
+        candidate = queue.dequeue()
+        if handle_node_fn(candidate):
+            for child in asset_graph.get_children_partitions(
+                candidate.asset_key, candidate.partition_key
+            ):
+                if child not in all_nodes:
+                    queue.enqueue(child)
+                    all_nodes.add(child)
 
 
 def get_freshness_constraints_by_key(
@@ -714,13 +817,31 @@ def reconcile(
         eventual_asset_partitions_to_reconcile_for_freshness=eventual_asset_partitions_to_reconcile_for_freshness,
     )
 
+    run_requests = build_run_requests(
+        asset_partitions_to_reconcile | asset_partitions_to_reconcile_for_freshness,
+        asset_graph,
+        run_tags,
+    )
+
+    return run_requests, cursor.with_updates(
+        latest_storage_id=latest_storage_id,
+        run_requests=run_requests,
+        asset_graph=repository_def.asset_graph,
+        newly_materialized_root_asset_keys=newly_materialized_root_asset_keys,
+        newly_materialized_root_partitions_by_asset_key=newly_materialized_root_partitions_by_asset_key,
+    )
+
+
+def build_run_requests(
+    asset_partitions: Iterable[AssetKeyPartitionKey],
+    asset_graph: AssetGraph,
+    run_tags: Optional[Mapping[str, str]],
+) -> Sequence[RunRequest]:
     assets_to_reconcile_by_partitions_def_partition_key: Mapping[
         Tuple[Optional[PartitionsDefinition], Optional[str]], Set[AssetKey]
     ] = defaultdict(set)
 
-    for asset_partition in (
-        asset_partitions_to_reconcile | asset_partitions_to_reconcile_for_freshness
-    ):
+    for asset_partition in asset_partitions:
         assets_to_reconcile_by_partitions_def_partition_key[
             asset_graph.get_partitions_def(asset_partition.asset_key), asset_partition.partition_key
         ].add(asset_partition.asset_key)
@@ -742,13 +863,7 @@ def reconcile(
             )
         )
 
-    return run_requests, cursor.with_updates(
-        latest_storage_id=latest_storage_id,
-        run_requests=run_requests,
-        asset_graph=repository_def.asset_graph,
-        newly_materialized_root_asset_keys=newly_materialized_root_asset_keys,
-        newly_materialized_root_partitions_by_asset_key=newly_materialized_root_partitions_by_asset_key,
-    )
+    return run_requests
 
 
 @experimental
