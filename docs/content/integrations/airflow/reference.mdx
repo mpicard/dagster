@@ -9,9 +9,9 @@ This reference provides a high-level look at working with Airflow using the [`ai
 
 ---
 
-## Airflow Dag directory as a Dagster Repository
+## Airflow DAG directory as a Dagster repository
 
-To load all Airflow DAGS in a file path into a [Dagster Repository](/concepts/repositories-workspaces/repositories), use <PyObject module="dagster_airflow" object="make_dagster_repo_from_airflow_dags_path" />:
+To load all Airflow DAGS in a file path into a [Dagster repository](/concepts/repositories-workspaces/repositories), use <PyObject module="dagster_airflow" object="make_dagster_repo_from_airflow_dags_path" />:
 
 ```python file=/integrations/airflow/migrate_repo.py
 import os
@@ -24,7 +24,7 @@ migrated_airflow_repo = make_dagster_repo_from_airflow_dags_path(
 )
 ```
 
-## Dagster Job to Dag
+## Dagster job to Airflow DAG
 
 To convert a Dagster Job to a Airflow Dag[dagster repository](/concepts/repositories-workspaces/repositories), use <PyObject module="dagster_airflow" object="make_dagster_repo_from_airflow_dags_path" />:
 
@@ -53,7 +53,7 @@ dag, tasks = make_airflow_dag(
 
 ## Orchestrating Dagster jobs from Airflow
 
-You can orchestrate Dagster job runs from airflow by using the `DagsterCloudOperator` or `DagsterOperator` operators in your existing airflow dags. For example, here's an airflow Dag:
+You can orchestrate Dagster job runs from Airflow by using the `DagsterCloudOperator` or `DagsterOperator` operators in your existing Airflow DAGs. For example, here's an Airflow DAG:
 
 ```python file=/integrations/airflow/operator.py
 from datetime import datetime
@@ -75,7 +75,7 @@ with DAG(
     )
 ```
 
-In airflow 2.0+ you can create a dagster connection type to store configuration related to your dagster cloud organization, you can also pass this directly to the operator if you're using airflow 1.0.
+In Airflow 2.0+, you can create a Dagster connection type to store configuration related to your Dagster Cloud organization. If you're using Airflow 1.0, you can also pass this directly to the operator.
 
 ## Exporting Dagster jobs to Airflow
 
@@ -141,7 +141,7 @@ If you run this code interactively, you'll see that `dag` and `tasks` are ordina
 [<Task(DagsterPythonOperator): hello_cereal>]
 ```
 
-Like other Airflow DAG definition files, this should go inside `$AIRLFLOW_HOME/dags`. The `docs_snippets.integrations.airflow.hello_cereal` module that's passed as the value for the `module_name` argument must be importable via the sys.path.
+Like other Airflow DAG definition files, this should go inside `$AIRLFLOW_HOME/dags`. The `docs_snippets.integrations.airflow.hello_cereal` module that's passed as the value for the `module_name` argument must be importable via the `sys.path`.
 
 After this, the DAG should show up inside Airflow:
 
@@ -152,9 +152,9 @@ width={1272}
 height={868}
 />
 
-### Running Containerized
+### Running containerized
 
-The approach above runs each op inside an operator that's similar to the Airflow PythonOperator. If you instead want to containerize your Dagster job and run it using an operator that's similar to the Airflow DockerOperator, you can use <PyObject module="dagster_airflow" object="make_airflow_dag_containerized" />.
+The approach above runs each op inside an operator that's similar to the Airflow `PythonOperator`. If you instead want to containerize your Dagster job and run it using an operator that's similar to the Airflow `DockerOperator`, you can use <PyObject module="dagster_airflow" object="make_airflow_dag_containerized" />.
 
 As in the uncontainerized case, you'll put a new Python file defining your DAG in the directory in which Airflow looks for DAGs:
 
@@ -182,9 +182,9 @@ dag, steps = make_airflow_dag_containerized(
 )
 ```
 
-The `image` argument is the name of the Docker image. Running in a containerized context requires a persistent intermediate storage layer available to the Dagster containers, such as a network filesystem, S3, or GCS. You can pass `op_kwargs` through to the the **`DagsterDockerOperator`** to use custom TLS settings, the private registry of your choice, etc., just as you would configure the ordinary Airflow **`DockerOperator`**.
+The `image` argument is the name of the Docker image. Running in a containerized context requires a persistent intermediate storage layer available to the Dagster containers, such as a network filesystem, S3, or GCS. You can pass `op_kwargs` through to the the `DagsterDockerOperator` to use custom TLS settings, the private registry of your choice, etc., just as you would configure the ordinary Airflow `DockerOperator`.
 
-If you want your containerized job to be available to Airflow operators running on other machines (for example, in environments where Airflow workers are running remotely) you'll need to push your Docker image to a Docker registry so that remote instances of Docker can pull the image by name, or otherwise ensure that the image is available on remote nodes.
+If you want your containerized job to be available to Airflow operators running on other machines - for example, in environments where Airflow workers are running remotely - you'll need to push your Docker image to a Docker registry so that remote instances of Docker can pull the image by name, or otherwise ensure that the image is available on remote nodes.
 
 ## Ingesting Airflow operators
 
@@ -223,7 +223,7 @@ There are three jobs in the repo:
 
 - `airflow_simple_dag` demonstrates the use of Airflow templates.
 - `airflow_complex_dag` shows the translation of a more complex dependency structure.
-- `airflow_kubernetes_dag` shows the translation of a dag using kubernetes pod operators.
+- `airflow_kubernetes_dag` shows the translation of a DAG using Kubernetes pod operators.
 
 ```python file=../../with_airflow/with_airflow/repository.py startafter=start_repo_marker_0 endbefore=end_repo_marker_0
 from dagster_airflow import (
@@ -247,7 +247,7 @@ def with_airflow():
     return [airflow_complex_dag, airflow_simple_dag, airflow_kubernetes_dag]
 ```
 
-Note that the "execution_date" for the Airflow DAG is specified through the job tags. To specify tags, call to:
+Note that the `execution_date` for the Airflow DAG is specified through the job tags. To specify tags, call to:
 
 ```python file=../../with_airflow/with_airflow/repository.py startafter=start_repo_marker_1 endbefore=end_repo_marker_1
 airflow_simple_dag_with_execution_date = make_dagster_job_from_airflow_dag(
