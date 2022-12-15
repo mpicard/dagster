@@ -380,7 +380,7 @@ def test_multiple_tag_limits(
 
         list(daemon.run_iteration(bounded_ctx))
 
-        assert get_run_ids(instance.run_launcher.queue()) == ["run-1", "run-3"]
+        assert set(get_run_ids(instance.run_launcher.queue())) == {"run-1", "run-3"}
 
 
 @pytest.mark.parametrize(
@@ -479,7 +479,7 @@ def test_limits_per_unique_value(use_threads, workspace_context, pipeline_handle
 
         list(daemon.run_iteration(bounded_ctx))
 
-        assert get_run_ids(instance.run_launcher.queue()) == ["run-1", "run-3"]
+        assert set(get_run_ids(instance.run_launcher.queue())) == {"run-1", "run-3"}
 
 
 @pytest.mark.parametrize(
